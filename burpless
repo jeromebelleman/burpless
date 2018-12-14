@@ -1,0 +1,161 @@
+#! /usr/bin/env node
+
+const argparse = require('argparse')
+const walk = require('walk')
+const vinegar = require('vinegar')
+const assert = require('assert')
+
+// Parse arguments
+const parser = new argparse.ArgumentParser()
+parser.addArgument(['-f', '--features'], { nargs: '+' })
+parser.addArgument(['-d', '--definitions'], { nargs: '+' })
+const args = parser.parseArgs()
+
+function runBackgrounds (world, background) {
+  for (const step of background) {
+    let matched = false
+    for (const regExp in lib) {
+      const matches = step.text.match(regExp)
+      if (matches) {
+        lib[regExp](world, ...matches.slice(1))
+        matched = true
+        break
+      }
+    }
+    if (!matched) console.error(`No matching function for "${step.text}"`)
+  }
+}
+
+function runFunction (world, scene, results, keyword, inThen, func, params) {
+  try {
+    const result = func(world, scene, ...params.map(str => str.trim()))
+    if (result instanceof Promise) scene.functions[func.name] = result
+    if (keyword === 'Then' || (keyword === 'And' && inThen)) {
+      inThen = true
+      results.push(result instanceof Promise ? result : true)
+    } else {
+      inThen = false
+    }
+  } catch (err) {
+    catchErr(world, err)
+  }
+
+  return inThen
+}
+
+function strip (string) {
+  return string.replace(/^\s+|\s+$/g, '')
+}
+
+function runScenarios (world, results, scenarios) {
+  const scene = { functions: {} }
+  let inThen = false
+  for (const step of scenarios) {
+    // Find matching function and run it
+    let matched = false
+    for (const regExp in lib) {
+      const matches = step.text.match(regExp)
+      if (matches) {
+        inThen = runFunction(world, scene, results, strip(step.keyword),
+          inThen, lib[regExp], matches.slice(1))
+        matched = true
+        break
+      }
+    }
+    if (!matched) console.error(`No matching function for "${step.text}"`)
+  }
+}
+
+async function runTests (allTests) {
+  const results = []
+  const world = {}
+
+  // Run background and scenario steps
+  runBackgrounds(world, allTests.backgrounds)
+  runScenarios(world, results, allTests.scenarios)
+
+  // Wait for promises returned by scenarios and catch any error
+  let successes = 0
+  for (const result of results) {
+    try {
+      if ((result instanceof Promise && await result) || result) successes++
+    } catch (err) {
+      catchErr(world, err)
+    }
+  }
+  console.log(`Successfully ran ${successes}/${results.length} tests`)
+
+  // Run teardowns for scenario steps, then background steps
+  for (const teardown of snoTeardowns) await teardown(world)
+  for (const teardown of bgTeardowns) await teardown(world)
+}
+
+function catchErr (world, err) {
+  if (err instanceof assert.AssertionError) {
+    catchAssert(err)
+  } else {
+    console.error(err)
+  }
+
+  if ('catchErr' in world) world.catchErr(err)
+}
+
+function catchAssert (err) {
+  console.error()
+  console.error(`A${err.stack.match(/at \S+ \(.+\)/)[0].slice(1)}`)
+  console.error(err.message)
+  console.error()
+}
+
+function cwd (path) {
+  return `${process.cwd()}/${path}`
+}
+
+function mergeLib (lib, path) {
+  let module = require(path)
+
+  // Merge step definitions
+  Object.assign(lib, module.lib)
+
+  // Add teardown
+  if ('teardown' in module) snoTeardowns.push(module.teardown)
+  if ('bgTeardown' in module) bgTeardowns.push(module.bgTeardown)
+}
+
+function stroll (extension) {
+  const paths = []
+  walk.walkSync('.', {
+    listeners: {
+      file: (root, stats, next) => {
+        if (stats.name.endsWith(extension)) paths.push(`${root}/${stats.name}`)
+        next()
+      }
+    }
+  })
+
+  return paths
+}
+
+// Find files
+let definitions = args.definitions || []
+let features = args.features || []
+
+if (definitions.length < 1) definitions = stroll('.js')
+
+// Load step definitions
+const lib = {}
+const bgTeardowns = []
+const snoTeardowns = []
+definitions.map(cwd).map(path => mergeLib(lib, path)) // require() needs cwd()
+
+// Load features
+if (features.length < 1) features = stroll('.feature')
+const allTests = { backgrounds: [], scenarios: [] }
+features.map(path => {
+  const tests = vinegar.load(path)
+  allTests.backgrounds.push(...tests.backgrounds)
+  allTests.scenarios.push(...tests.scenarios)
+})
+
+// Run tests
+runTests(allTests)
