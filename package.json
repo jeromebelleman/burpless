@@ -4,12 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jasmine"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
     "argparse": "^1.0.10",
+    "jasmine": "^3.3.1",
     "walk": "^2.3.14"
   },
   "devDependencies": {
