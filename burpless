@@ -5,7 +5,7 @@ const assert = require('assert')
 const walk = require('walk')
 const vinegar = require('vinegar')
 
-function runBackgrounds (world, background) {
+function runBackgrounds (lib, world, background) {
   for (const step of background) {
     let matched = false
     for (const regExp in lib) {
@@ -32,11 +32,12 @@ function runFunction (world, scene, results, keyword, func, params) {
   }
 }
 
-function strip (string) {
+exports.strip = function (string) {
   return string.replace(/^\s+|\s+$/g, '')
 }
 
-function runScenarios (world, results, scenarios) {
+function runScenarios (lib, bgTeardowns, snoTeardowns,
+  world, results, scenarios) {
   const scene = { functions: {} }
   for (const step of scenarios) {
     // Find matching function and run it
@@ -44,7 +45,7 @@ function runScenarios (world, results, scenarios) {
     for (const regExp in lib) {
       const matches = step.text.match(regExp)
       if (matches) {
-        runFunction(world, scene, results, strip(step.keyword),
+        runFunction(world, scene, results, exports.strip(step.keyword),
           lib[regExp], matches.slice(1))
         matched = true
         break
@@ -54,13 +55,14 @@ function runScenarios (world, results, scenarios) {
   }
 }
 
-async function runTests (allTests) {
+async function runTests (lib, bgTeardowns, snoTeardowns, allTests) {
   const results = []
   const world = {}
 
   // Run background and scenario steps
-  runBackgrounds(world, allTests.backgrounds)
-  runScenarios(world, results, allTests.scenarios)
+  runBackgrounds(lib, world, allTests.backgrounds)
+  runScenarios(lib, bgTeardowns, snoTeardowns,
+    world, results, allTests.scenarios)
 
   // Wait for promises returned by scenarios and catch any error
   let successes = 0
@@ -95,11 +97,11 @@ function catchAssert (err) {
   console.error()
 }
 
-function cwd (path) {
+exports.cwd = function (path) {
   return `${process.cwd()}/${path}`
 }
 
-function mergeLib (path) {
+function mergeLib (lib, bgTeardowns, snoTeardowns, path) {
   let module = require(path)
 
   // Merge step definitions
@@ -110,7 +112,7 @@ function mergeLib (path) {
   if ('bgTeardown' in module) bgTeardowns.push(module.bgTeardown)
 }
 
-function stroll (extension) {
+exports.stroll = function (extension) {
   const paths = []
   walk.walkSync('.', {
     listeners: {
@@ -124,31 +126,36 @@ function stroll (extension) {
   return paths
 }
 
-// Parse arguments
-const parser = new argparse.ArgumentParser()
-parser.addArgument(['-f', '--features'], { nargs: '+' })
-parser.addArgument(['-d', '--definitions'], { nargs: '+' })
-const args = parser.parseArgs()
+if (require.main === module) {
+  // Parse arguments
+  const parser = new argparse.ArgumentParser()
+  parser.addArgument(['-f', '--features'], { nargs: '+' })
+  parser.addArgument(['-d', '--definitions'], { nargs: '+' })
+  const args = parser.parseArgs()
 
-// Load step definitions
-let definitions = args.definitions || []
-if (definitions.length < 1) definitions = stroll('.js')
+  // Load step definitions
+  let definitions = args.definitions || []
+  if (definitions.length < 1) definitions = exports.stroll('.js')
 
-const lib = {}
-const bgTeardowns = []
-const snoTeardowns = []
-definitions.map(cwd).map(path => mergeLib(path)) // require() needs cwd()
+  const lib = {}
+  const bgTeardowns = []
+  const snoTeardowns = []
+  // require() needs cwd()
+  definitions
+    .map(exports.cwd)
+    .map(path => mergeLib(lib, bgTeardowns, snoTeardowns, path))
 
-// Load features
-let features = args.features || []
-if (features.length < 1) features = stroll('.feature')
+  // Load features
+  let features = args.features || []
+  if (features.length < 1) features = exports.stroll('.feature')
 
-const allTests = { backgrounds: [], scenarios: [] }
-features.map(path => {
-  const tests = vinegar.load(path)
-  allTests.backgrounds.push(...tests.backgrounds)
-  allTests.scenarios.push(...tests.scenarios)
-})
+  const allTests = { backgrounds: [], scenarios: [] }
+  features.map(path => {
+    const tests = vinegar.load(path)
+    allTests.backgrounds.push(...tests.backgrounds)
+    allTests.scenarios.push(...tests.scenarios)
+  })
 
-// Run tests
-runTests(allTests)
+  // Run tests
+  runTests(lib, bgTeardowns, snoTeardowns, allTests)
+}
