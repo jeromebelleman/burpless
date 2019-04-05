@@ -38,20 +38,22 @@ exports.strip = function (string) {
 
 function runScenarios (lib, bgTeardowns, snoTeardowns,
   world, results, scenarios) {
-  const scene = { functions: {} }
-  for (const step of scenarios) {
-    // Find matching function and run it
-    let matched = false
-    for (const regExp in lib) {
-      const matches = step.text.match(regExp)
-      if (matches) {
-        runFunction(world, scene, results, exports.strip(step.keyword),
-          lib[regExp], matches.slice(1))
-        matched = true
-        break
+  for (const scenario of scenarios) {
+    const scene = { functions: {} }
+    for (const step of scenario) {
+      // Find matching function and run it
+      let matched = false
+      for (const regExp in lib) {
+        const matches = step.text.match(regExp)
+        if (matches) {
+          runFunction(world, scene, results, exports.strip(step.keyword),
+            lib[regExp], matches.slice(1))
+          matched = true
+          break
+        }
       }
+      if (!matched) console.error(`No matching function for "${step.text}"`)
     }
-    if (!matched) console.error(`No matching function for "${step.text}"`)
   }
 }
 
